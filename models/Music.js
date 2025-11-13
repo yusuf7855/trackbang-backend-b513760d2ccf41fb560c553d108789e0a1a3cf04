@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 
 const musicSchema = new mongoose.Schema({
   spotifyId: { type: String, required: true, unique: true },
-  title: { type: String, required: true }, // Şarkı adı eklendi
-  artist: { type: String, required: true }, // Sanatçı adı eklendi
+  title: { type: String, required: true },
+  artist: { type: String, required: true }, 
   beatportUrl: { type: String, required: true },
   category: { type: String, required: true },
   likes: { type: Number, default: 0 },
