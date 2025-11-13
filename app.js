@@ -1,4 +1,4 @@
-// app.js - Clean Code Versiyonu (Platform Links System)
+// app.js - Complete Production Ready (Platform Links System)
 const express = require('express');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
@@ -12,14 +12,12 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://221118047:9KY5zsMHQRJyEwGq@cluster0.rz2m5a4.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
-const NODE_ENV = process.env.NODE_ENV || 'production';
 
 console.log('🚀 TrackBang Server başlatılıyor...');
-console.log(`📦 Environment: ${NODE_ENV}`);
 
 // ========== MIDDLEWARE CONFIGURATION ==========
 
-// 1. CORS (EN ÖNCE)
+// 1. CORS
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
@@ -31,13 +29,11 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// 3. Request logging (Development only)
-if (NODE_ENV === 'development') {
-  app.use((req, res, next) => {
-    console.log(`${req.method} ${req.path}`);
-    next();
-  });
-}
+// 3. Request logging
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.path}`);
+  next();
+});
 
 // ========== STATIC FILE SERVING ==========
 
@@ -47,7 +43,6 @@ const assetsPath = path.join(__dirname, 'assets');
 console.log('📁 Uploads klasörü:', uploadsPath);
 console.log('📁 Assets klasörü:', assetsPath);
 
-// Klasörleri oluştur
 const ensureDirectoryExists = (dirPath) => {
   if (!fs.existsSync(dirPath)) {
     console.log(`📁 Klasör oluşturuluyor: ${dirPath}`);
@@ -62,7 +57,6 @@ ensureDirectoryExists(path.join(uploadsPath, 'playlist-covers'));
 ensureDirectoryExists(path.join(uploadsPath, 'profile-images'));
 ensureDirectoryExists(assetsPath);
 
-// Static file middleware
 app.use('/uploads', express.static(uploadsPath, {
   setHeaders: (res, filePath) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -93,7 +87,7 @@ app.use('/assets', express.static(assetsPath, {
   }
 }));
 
-// ========== HOME PAGE - SERVER STATUS ==========
+// ========== HOME PAGE ==========
 
 app.get('/', (req, res) => {
   const uptime = process.uptime();
@@ -111,7 +105,6 @@ app.get('/', (req, res) => {
       seconds: uptime,
       formatted: `${uptimeHours}h ${uptimeMinutes}m ${uptimeSeconds}s`
     },
-    environment: NODE_ENV,
     nodeVersion: process.version,
     port: PORT,
     database: {
@@ -120,25 +113,11 @@ app.get('/', (req, res) => {
       name: mongoose.connection.name || 'Unknown'
     },
     features: {
-      platformLinks: ['Apple Music', 'YouTube Music', 'Beatport', 'SoundCloud'],
-      genres: ['Afro House', 'Indie Dance', 'Organic House', 'Down Tempo', 'Melodic House'],
-      coverImages: 'Enabled',
-      userMusicPreferences: 'Enabled',
-      socialFeatures: 'Enabled'
-    },
-    endpoints: {
-      health: '/health',
-      api: '/api',
-      documentation: '/api/docs',
-      music: '/api/music',
-      playlists: '/api/playlists',
-      hot: '/api/hot',
-      search: '/api/search',
-      payments: '/api/payments'
+      platformLinks: ['Spotify', 'Apple Music', 'YouTube Music', 'Beatport', 'SoundCloud'],
+      genres: ['Afro House', 'Indie Dance', 'Organic House', 'Down Tempo', 'Melodic House']
     }
   };
 
-  // HTML response
   if (req.headers.accept && req.headers.accept.includes('text/html')) {
     const html = `
     <!DOCTYPE html>
@@ -165,7 +144,6 @@ app.get('/', (req, res) => {
                 max-width: 900px;
                 width: 100%;
                 box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-                backdrop-filter: blur(10px);
             }
             .header {
                 text-align: center;
@@ -173,10 +151,7 @@ app.get('/', (req, res) => {
                 padding-bottom: 20px;
                 border-bottom: 2px solid #667eea;
             }
-            .logo {
-                font-size: 3rem;
-                margin-bottom: 10px;
-            }
+            .logo { font-size: 3rem; margin-bottom: 10px; }
             h1 { 
                 font-size: 2.5rem;
                 color: #667eea;
@@ -199,7 +174,7 @@ app.get('/', (req, res) => {
                 padding: 8px 16px;
                 border-radius: 25px;
                 font-weight: 600;
-                margin: 15px 0;
+                margin: 15px 5px;
                 background: #22c55e;
                 color: white;
             }
@@ -227,9 +202,7 @@ app.get('/', (req, res) => {
                 color: white;
                 transition: transform 0.3s;
             }
-            .info-card:hover {
-                transform: translateY(-5px);
-            }
+            .info-card:hover { transform: translateY(-5px); }
             .info-card h3 {
                 margin-bottom: 15px;
                 font-size: 1.2rem;
@@ -308,9 +281,11 @@ app.get('/', (req, res) => {
                 <div class="logo">🎵</div>
                 <h1>TrackBang API</h1>
                 <span class="version">v${serverInfo.version}</span>
-                <div class="status-badge">
-                    <div class="status-dot"></div>
-                    <span>SERVER ACTIVE</span>
+                <div style="margin-top: 15px;">
+                    <div class="status-badge">
+                        <div class="status-dot"></div>
+                        <span>SERVER ACTIVE</span>
+                    </div>
                 </div>
             </div>
             
@@ -318,7 +293,6 @@ app.get('/', (req, res) => {
                 <div class="info-card">
                     <h3>⚡ Server Info</h3>
                     <p><strong>Port:</strong> ${serverInfo.port}</p>
-                    <p><strong>Environment:</strong> ${serverInfo.environment}</p>
                     <p><strong>Node.js:</strong> ${serverInfo.nodeVersion}</p>
                     <p><strong>Uptime:</strong> ${serverInfo.uptime.formatted}</p>
                 </div>
@@ -336,9 +310,6 @@ app.get('/', (req, res) => {
                 <div class="feature-list">
                     ${serverInfo.features.platformLinks.map(p => `<span class="feature-tag">${p}</span>`).join('')}
                     ${serverInfo.features.genres.map(g => `<span class="feature-tag">${g}</span>`).join('')}
-                    <span class="feature-tag">Cover Images</span>
-                    <span class="feature-tag">Music Preferences</span>
-                    <span class="feature-tag">Social Features</span>
                 </div>
             </div>
             
@@ -350,7 +321,6 @@ app.get('/', (req, res) => {
                     <div class="endpoint-item">GET /api/playlists → Playlists API</div>
                     <div class="endpoint-item">GET /api/hot → HOT Page</div>
                     <div class="endpoint-item">GET /api/search → Search API</div>
-                    <div class="endpoint-item">POST /api/payments → Payments API</div>
                 </div>
             </div>
             
@@ -358,7 +328,6 @@ app.get('/', (req, res) => {
                 Last updated: ${new Date().toLocaleString('tr-TR')}
             </div>
         </div>
-        
         <script>
             setTimeout(() => window.location.reload(), 60000);
         </script>
@@ -369,7 +338,6 @@ app.get('/', (req, res) => {
     return res.send(html);
   }
 
-  // JSON response
   res.json({
     success: true,
     ...serverInfo
@@ -391,8 +359,7 @@ app.get('/health', (req, res) => {
       connected: mongoose.connection.readyState === 1,
       readyState: mongoose.connection.readyState,
       status: ['disconnected', 'connected', 'connecting', 'disconnecting'][mongoose.connection.readyState]
-    },
-    environment: NODE_ENV
+    }
   };
   
   const statusCode = mongoose.connection.readyState === 1 ? 200 : 503;
@@ -402,143 +369,6 @@ app.get('/health', (req, res) => {
     ...healthCheck
   });
 });
-
-// ========== API DOCUMENTATION ==========
-
-app.get('/api/docs', (req, res) => {
-  const documentation = {
-    success: true,
-    message: 'TrackBang API Documentation',
-    version: '2.0.0',
-    baseUrl: `${req.protocol}://${req.get('host')}/api`,
-    features: {
-      platformLinks: ['Apple Music', 'YouTube Music', 'Beatport', 'SoundCloud'],
-      genres: ['afrohouse', 'indiedance', 'organichouse', 'downtempo', 'melodichouse'],
-      authentication: 'JWT Bearer Token',
-      fileUploads: 'Cover Images, Profile Images'
-    },
-    endpoints: {
-      music: {
-        'GET /api/music': 'Get all music (pagination)',
-        'GET /api/music/:id': 'Get single music',
-        'GET /api/music/featured': 'Featured music',
-        'GET /api/music/popular': 'Popular music',
-        'GET /api/music/new-releases': 'New releases',
-        'GET /api/music/genre/:genre': 'Music by genre',
-        'POST /api/music': 'Create music (Admin)',
-        'PUT /api/music/:id': 'Update music (Admin)',
-        'DELETE /api/music/:id': 'Delete music (Admin)',
-        'POST /api/music/:id/like': 'Like/Unlike music (Auth)'
-      },
-      playlists: {
-        'GET /api/playlists/public': 'Public playlists',
-        'GET /api/playlists/admin': 'Admin playlists',
-        'GET /api/playlists/category/:category': 'Playlists by genre',
-        'POST /api/playlists/admin': 'Create admin playlist (Admin)',
-        'POST /api/playlists': 'Create user playlist (Auth)',
-        'PUT /api/playlists/:id': 'Update playlist (Auth)',
-        'DELETE /api/playlists/:id': 'Delete playlist (Auth)'
-      },
-      hot: {
-        'GET /api/hot': 'Latest from each genre',
-        'GET /api/hot/genre/:genre/latest': 'Latest by genre',
-        'GET /api/hot/trending': 'Trending playlists',
-        'GET /api/hot/stats': 'HOT statistics'
-      },
-      search: {
-        'GET /api/search': 'Unified search',
-        'GET /api/search/users': 'Search users',
-        'GET /api/search/playlists': 'Search playlists',
-        'GET /api/search/musics': 'Search music',
-        'GET /api/search/by-artist': 'Search by artist',
-        'GET /api/search/by-genre': 'Search by genre'
-      },
-      payments: {
-        'POST /api/payments/verify-google-play': 'Verify Google Play purchase (Auth)',
-        'GET /api/payments/subscription-status': 'Get subscription status (Auth)',
-        'GET /api/payments/premium-check': 'Quick premium check (Auth)'
-      }
-    }
-  };
-
-  res.json(documentation);
-});
-
-// ========== DEBUG ENDPOINTS (Development Only) ==========
-
-if (NODE_ENV === 'development') {
-  app.get('/debug/uploads', (req, res) => {
-    try {
-      const checkUploads = (dirPath, relativePath = '') => {
-        if (!fs.existsSync(dirPath)) {
-          return { exists: false, path: dirPath };
-        }
-        
-        const items = fs.readdirSync(dirPath, { withFileTypes: true });
-        const result = {
-          exists: true,
-          path: dirPath,
-          relativePath,
-          files: [],
-          directories: {}
-        };
-        
-        items.forEach(item => {
-          if (item.isDirectory()) {
-            const subPath = path.join(dirPath, item.name);
-            result.directories[item.name] = checkUploads(subPath, path.join(relativePath, item.name));
-          } else {
-            const stats = fs.statSync(path.join(dirPath, item.name));
-            result.files.push({
-              name: item.name,
-              size: `${(stats.size / 1024).toFixed(2)} KB`,
-              url: `${req.protocol}://${req.get('host')}/uploads${path.join(relativePath, item.name).replace(/\\/g, '/')}`
-            });
-          }
-        });
-        
-        return result;
-      };
-      
-      res.json({
-        success: true,
-        message: 'Uploads directory structure',
-        baseUrl: `${req.protocol}://${req.get('host')}`,
-        uploadsPath,
-        structure: checkUploads(uploadsPath)
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
-    }
-  });
-
-  app.get('/debug/test-image/:filename', (req, res) => {
-    const filename = req.params.filename;
-    const imagePath = path.join(uploadsPath, 'store-listings', filename);
-    
-    if (fs.existsSync(imagePath)) {
-      const stats = fs.statSync(imagePath);
-      res.json({
-        success: true,
-        file: {
-          name: filename,
-          path: imagePath,
-          size: `${(stats.size / 1024).toFixed(2)} KB`,
-          url: `${req.protocol}://${req.get('host')}/uploads/store-listings/${filename}`
-        }
-      });
-    } else {
-      res.json({
-        success: false,
-        message: 'File not found',
-        searchedPath: imagePath
-      });
-    }
-  });
-}
 
 // ========== API ROUTES ==========
 
@@ -556,7 +386,6 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const storeRoutes = require('./routes/storeRoutes');
 const messageRoutes = require('./routes/messageRoutes');
 
-// Mount routes
 app.use('/api/payments', paymentRoutes);
 app.use('/api/music', musicRoutes);
 app.use('/api/playlists', playlistRoutes);
@@ -567,21 +396,30 @@ app.use('/api/download', downloadRoutes);
 app.use('/api/samples', sampleRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/messages', messageRoutes);
-app.use('/api', authRoutes); // Auth routes (register, login, etc.)
+app.use('/api', authRoutes);
 
 console.log('✅ API routes loaded');
 
 // ========== MONGODB CONNECTION ==========
 
+let isConnecting = false;
+let isShuttingDown = false;
+
 const connectToMongoDB = async () => {
+  if (isConnecting || isShuttingDown) {
+    console.log('⚠️ Connection already in progress or shutting down');
+    return false;
+  }
+
   try {
+    isConnecting = true;
     console.log('🔄 Connecting to MongoDB...');
 
     if (!MONGO_URI) {
-      throw new Error('MONGO_URI not found in environment variables');
+      throw new Error('MONGO_URI not found');
     }
     
-    const mongooseOptions = {
+    await mongoose.connect(MONGO_URI, {
       serverSelectionTimeoutMS: 30000,
       connectTimeoutMS: 30000,
       socketTimeoutMS: 30000,
@@ -589,9 +427,7 @@ const connectToMongoDB = async () => {
       retryWrites: true,
       heartbeatFrequencyMS: 10000,
       family: 4
-    };
-    
-    await mongoose.connect(MONGO_URI, mongooseOptions);
+    });
     
     console.log('✅ MongoDB connected successfully!');
     console.log(`📊 Database: ${mongoose.connection.name || 'default'}`);
@@ -601,16 +437,17 @@ const connectToMongoDB = async () => {
   } catch (error) {
     console.error('❌ MongoDB connection error:', error.message);
     return false;
+  } finally {
+    isConnecting = false;
   }
 };
 
-// MongoDB connection events
 mongoose.connection.on('connected', () => {
   console.log('🔗 Mongoose connected to MongoDB');
 });
 
 mongoose.connection.on('error', (err) => {
-  console.error('❌ Mongoose connection error:', err);
+  console.error('❌ Mongoose connection error:', err.message);
 });
 
 mongoose.connection.on('disconnected', () => {
@@ -619,38 +456,19 @@ mongoose.connection.on('disconnected', () => {
 
 // ========== ERROR HANDLING ==========
 
-// 404 handler
 app.use('*', (req, res) => {
-  console.log(`❌ 404 - Route not found: ${req.method} ${req.originalUrl}`);
   res.status(404).json({
     success: false,
-    message: `Route not found: ${req.method} ${req.originalUrl}`,
-    availableEndpoints: {
-      home: '/',
-      health: '/health',
-      documentation: '/api/docs',
-      music: '/api/music',
-      playlists: '/api/playlists',
-      hot: '/api/hot',
-      search: '/api/search'
-    }
+    message: `Route not found: ${req.method} ${req.originalUrl}`
   });
 });
 
-// Global error handler
 app.use((error, req, res, next) => {
-  console.error('💥 Global error:', error);
+  console.error('💥 Error:', error.message);
   
-  const statusCode = error.statusCode || 500;
-  const message = error.message || 'Internal server error';
-  
-  res.status(statusCode).json({
+  res.status(error.statusCode || 500).json({
     success: false,
-    message,
-    error: NODE_ENV === 'development' ? {
-      message: error.message,
-      stack: error.stack
-    } : undefined
+    message: error.message || 'Internal server error'
   });
 });
 
@@ -661,25 +479,23 @@ let server;
 const startServer = async () => {
   try {
     if (server && server.listening) {
-      console.log('⚠️ Server already running!');
+      console.log('⚠️ Server already running');
       return;
     }
 
-    // Connect to MongoDB
     const dbConnected = await connectToMongoDB();
     
     if (!dbConnected) {
       console.log('⚠️ MongoDB connection failed, but starting server...');
     }
     
-    // Start server
     server = app.listen(PORT, '0.0.0.0', () => {
       console.log('');
       console.log('🎉 ========================================');
-      console.log(`🚀 TRACKBANG API SERVER RUNNING ON PORT ${PORT}`);
-      console.log(`🌐 URL: http://localhost:${PORT}`);
-      console.log(`📚 Documentation: http://localhost:${PORT}/api/docs`);
-      console.log(`💚 Health Check: http://localhost:${PORT}/health`);
+      console.log(`🚀 TRACKBANG API SERVER RUNNING`);
+      console.log(`🌐 PORT: ${PORT}`);
+      console.log(`📚 URL: http://localhost:${PORT}`);
+      console.log(`💚 Health: http://localhost:${PORT}/health`);
       console.log('🎉 ========================================');
       console.log('');
     });
@@ -687,11 +503,11 @@ const startServer = async () => {
     server.on('error', (error) => {
       if (error.code === 'EADDRINUSE') {
         console.error(`❌ Port ${PORT} is already in use!`);
-        console.error('💡 Try a different port: PORT=3001 node app.js');
+        process.exit(1);
       } else {
         console.error('❌ Server error:', error.message);
+        process.exit(1);
       }
-      process.exit(1);
     });
     
   } catch (error) {
@@ -702,26 +518,43 @@ const startServer = async () => {
 
 // ========== GRACEFUL SHUTDOWN ==========
 
-const gracefulShutdown = (signal) => {
+const gracefulShutdown = async (signal) => {
+  if (isShuttingDown) {
+    console.log('⚠️ Shutdown already in progress');
+    return;
+  }
+
+  isShuttingDown = true;
   console.log(`\n📱 Received ${signal}, shutting down gracefully...`);
   
-  if (server) {
-    server.close(() => {
-      console.log('🔒 HTTP server closed');
-      
-      mongoose.connection.close(false, () => {
-        console.log('🔐 MongoDB connection closed');
-        process.exit(0);
+  const shutdownTimeout = setTimeout(() => {
+    console.error('⚠️ Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+
+  try {
+    if (server) {
+      await new Promise((resolve) => {
+        server.close(() => {
+          console.log('🔒 HTTP server closed');
+          resolve();
+        });
       });
-    });
-    
-    // Force close after 10 seconds
-    setTimeout(() => {
-      console.error('⚠️ Forced shutdown after timeout');
-      process.exit(1);
-    }, 10000);
-  } else {
+    }
+
+    if (mongoose.connection.readyState === 1) {
+      await mongoose.connection.close();
+      console.log('🔐 MongoDB connection closed');
+    }
+
+    clearTimeout(shutdownTimeout);
+    console.log('✅ Graceful shutdown completed');
     process.exit(0);
+    
+  } catch (error) {
+    console.error('❌ Error during shutdown:', error.message);
+    clearTimeout(shutdownTimeout);
+    process.exit(1);
   }
 };
 
@@ -729,12 +562,12 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 process.on('unhandledRejection', (err) => {
-  console.error('💥 Unhandled Promise Rejection:', err);
+  console.error('💥 Unhandled Promise Rejection:', err.message);
   gracefulShutdown('UNHANDLED_REJECTION');
 });
 
 process.on('uncaughtException', (err) => {
-  console.error('💥 Uncaught Exception:', err);
+  console.error('💥 Uncaught Exception:', err.message);
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 

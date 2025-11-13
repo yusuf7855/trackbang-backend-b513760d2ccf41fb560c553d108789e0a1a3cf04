@@ -118,6 +118,7 @@ const formatMusicData = (music) => {
     imageUrl: music.imageUrl,
     genre: music.genre,
     platformLinks: {
+      spotify: music.platformLinks?.spotify || null,
       appleMusic: music.platformLinks?.appleMusic || null,
       youtubeMusic: music.platformLinks?.youtubeMusic || null,
       beatport: music.platformLinks?.beatport || null,

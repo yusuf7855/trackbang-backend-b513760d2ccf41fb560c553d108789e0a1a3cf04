@@ -1,4 +1,4 @@
-// controllers/musicController.js - Yeni Platform Link Sistemi ile Clean Code Versiyonu
+// controllers/musicController.js - Platform Link Sistemi (Spotify Dahil - 5 Platform)
 const Music = require('../models/Music');
 const Playlist = require('../models/Playlist');
 const User = require('../models/userModel');
@@ -41,24 +41,45 @@ const isValidObjectId = (id) => {
 };
 
 /**
- * Platform linklerini validate et
+ * Platform linklerini validate et (5 Platform)
  */
 const validatePlatformLinks = (platformLinks) => {
-  if (!platformLinks) return { isValid: false, message: 'En az bir platform linki gereklidir' };
+  if (!platformLinks) {
+    return { isValid: false, message: 'En az bir platform linki gereklidir' };
+  }
   
-  const { appleMusic, youtubeMusic, beatport, soundcloud } = platformLinks;
+  const { spotify, appleMusic, youtubeMusic, beatport, soundcloud } = platformLinks;
   
-  if (!appleMusic && !youtubeMusic && !beatport && !soundcloud) {
-    return { isValid: false, message: 'En az bir platform linki eklemelisiniz' };
+  // En az bir platform linki olmalı
+  if (!spotify && !appleMusic && !youtubeMusic && !beatport && !soundcloud) {
+    return { 
+      isValid: false, 
+      message: 'En az bir platform linki eklemelisiniz (Spotify, Apple Music, YouTube Music, Beatport veya SoundCloud)' 
+    };
   }
   
   return { isValid: true };
 };
 
+/**
+ * Platform linklerini formatla ve temizle
+ */
+const formatPlatformLinks = (platformLinks) => {
+  if (!platformLinks) return {};
+  
+  return {
+    spotify: platformLinks.spotify?.trim() || null,
+    appleMusic: platformLinks.appleMusic?.trim() || null,
+    youtubeMusic: platformLinks.youtubeMusic?.trim() || null,
+    beatport: platformLinks.beatport?.trim() || null,
+    soundcloud: platformLinks.soundcloud?.trim() || null
+  };
+};
+
 // ========== CREATE OPERATIONS ==========
 /**
  * @route   POST /api/music
- * @desc    Yeni müzik ekle (Admin)
+ * @desc    Yeni müzik ekle (Admin) - 5 Platform Support
  * @access  Admin
  */
 exports.addMusic = async (req, res) => {
@@ -100,12 +121,7 @@ exports.addMusic = async (req, res) => {
       imageUrl,
       imagePath: imagePath || null,
       genre: genre.toLowerCase(),
-      platformLinks: {
-        appleMusic: platformLinks.appleMusic?.trim() || null,
-        youtubeMusic: platformLinks.youtubeMusic?.trim() || null,
-        beatport: platformLinks.beatport?.trim() || null,
-        soundcloud: platformLinks.soundcloud?.trim() || null
-      },
+      platformLinks: formatPlatformLinks(platformLinks),
       metadata: metadata || {},
       isFeatured: isFeatured || false
     });
@@ -113,6 +129,7 @@ exports.addMusic = async (req, res) => {
     await newMusic.save();
 
     console.log(`✅ New music added: ${newMusic.title} by ${newMusic.artist}`);
+    console.log(`📊 Platform links: ${Object.keys(newMusic.platformLinks).filter(k => newMusic.platformLinks[k]).join(', ')}`);
 
     return successResponse(
       res,
@@ -331,11 +348,12 @@ exports.getPopularMusic = async (req, res) => {
  */
 exports.getNewReleases = async (req, res) => {
   try {
-    const { genre, limit = 10 } = req.query;
+    const { genre, limit = 10, days = 7 } = req.query;
 
     const options = {
       limit: parseInt(limit),
-      genre: genre?.toLowerCase() || null
+      genre: genre?.toLowerCase() || null,
+      days: parseInt(days)
     };
 
     const music = await Music.findNewReleases(options);
@@ -393,10 +411,66 @@ exports.getTop10ByCategory = async (req, res) => {
   }
 };
 
+/**
+ * @route   GET /api/music/by-platform/:platform
+ * @desc    Platforma göre müzikler
+ * @access  Public
+ */
+exports.getMusicByPlatform = async (req, res) => {
+  try {
+    const { platform } = req.params;
+    const { limit = 20, page = 1 } = req.query;
+
+    const validPlatforms = ['spotify', 'appleMusic', 'youtubeMusic', 'beatport', 'soundcloud'];
+    
+    if (!validPlatforms.includes(platform)) {
+      return errorResponse(res, 'Geçersiz platform', 400);
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const music = await Music.findByPlatform(platform, {
+      limit: parseInt(limit),
+      skip
+    });
+
+    return successResponse(res, {
+      music,
+      platform,
+      count: music.length,
+      pagination: {
+        currentPage: parseInt(page),
+        itemsPerPage: parseInt(limit)
+      }
+    });
+
+  } catch (err) {
+    console.error('❌ Get music by platform error:', err);
+    return errorResponse(res, 'Platform müzikleri getirilirken hata oluştu', 500, err);
+  }
+};
+
+/**
+ * @route   GET /api/music/platform-stats
+ * @desc    Platform link istatistikleri
+ * @access  Public
+ */
+exports.getPlatformStats = async (req, res) => {
+  try {
+    const stats = await Music.getPlatformStats();
+
+    return successResponse(res, { platformStats: stats });
+
+  } catch (err) {
+    console.error('❌ Get platform stats error:', err);
+    return errorResponse(res, 'Platform istatistikleri alınırken hata oluştu', 500, err);
+  }
+};
+
 // ========== UPDATE OPERATIONS ==========
 /**
  * @route   PUT /api/music/:id
- * @desc    Müzik güncelle (Admin)
+ * @desc    Müzik güncelle (Admin) - 5 Platform Support
  * @access  Admin
  */
 exports.updateMusic = async (req, res) => {
@@ -420,12 +494,13 @@ exports.updateMusic = async (req, res) => {
       updates.genre = updates.genre.toLowerCase();
     }
 
-    // Platform linklerini validate et
+    // Platform linklerini validate et ve formatla
     if (updates.platformLinks) {
       const linkValidation = validatePlatformLinks(updates.platformLinks);
       if (!linkValidation.isValid) {
         return errorResponse(res, linkValidation.message, 400);
       }
+      updates.platformLinks = formatPlatformLinks(updates.platformLinks);
     }
 
     const updatedMusic = await Music.findByIdAndUpdate(
@@ -480,7 +555,7 @@ exports.likeMusic = async (req, res) => {
 
     // Toggle like
     const result = await music.toggleLike(userId);
-    const isLiked = result.userLikes.includes(userId);
+    const isLiked = result.userLikes.some(uid => uid.toString() === userId.toString());
 
     // Kullanıcının müzik aktivitesini güncelle
     try {
@@ -848,7 +923,7 @@ exports.getMusicPlaylistInfo = async (req, res) => {
       isPublic: true,
       isActive: true
     })
-    .select('name genre subCategory description _id')
+    .select('name genre subCategory description coverImage _id')
     .lean();
 
     if (adminPlaylists.length === 0) {

@@ -1,4 +1,4 @@
-// controllers/hotController.js - Clean Code Versiyonu (Yeni Platform Link Sistemi)
+// controllers/hotController.js - Clean Code (Spotify Dahil - 5 Platform)
 const Playlist = require('../models/Playlist');
 const Music = require('../models/Music');
 
@@ -18,7 +18,7 @@ const getGenreDisplayName = (genre) => {
 };
 
 /**
- * Müzik datasını formatla
+ * Müzik datasını formatla (5 Platform)
  */
 const formatMusicData = (music) => {
   if (!music) return null;
@@ -30,6 +30,7 @@ const formatMusicData = (music) => {
     imageUrl: music.imageUrl,
     genre: music.genre,
     platformLinks: {
+      spotify: music.platformLinks?.spotify || null,
       appleMusic: music.platformLinks?.appleMusic || null,
       youtubeMusic: music.platformLinks?.youtubeMusic || null,
       beatport: music.platformLinks?.beatport || null,
@@ -39,7 +40,8 @@ const formatMusicData = (music) => {
     views: music.views || 0,
     userLikes: music.userLikes || [],
     isFeatured: music.isFeatured || false,
-    isNew: music.isNew || false
+    isNew: music.isNew || false,
+    metadata: music.metadata || {}
   };
 };
 
@@ -56,7 +58,7 @@ const formatPlaylistData = (playlist) => {
     genre: playlist.genre,
     genreDisplayName: getGenreDisplayName(playlist.genre),
     subCategory: playlist.subCategory,
-    coverImage: playlist.coverImage,
+    coverImage: playlist.coverImage || null,
     musicCount: playlist.musics?.length || 0,
     likes: playlist.likes || 0,
     views: playlist.views || 0,
@@ -98,6 +100,7 @@ const errorResponse = (res, message = 'Error occurred', statusCode = 500, error 
 
   if (error && process.env.NODE_ENV === 'development') {
     response.error = error.message;
+    response.stack = error.stack;
   }
 
   return res.status(statusCode).json(response);
@@ -106,7 +109,7 @@ const errorResponse = (res, message = 'Error occurred', statusCode = 500, error 
 // ========== MAIN CONTROLLERS ==========
 
 /**
- * @route   GET /api/hot/playlists
+ * @route   GET /api/hot
  * @desc    Her genre'den en son admin playlist'i getir (HOT sayfası)
  * @access  Public
  */
@@ -126,7 +129,7 @@ exports.getHotPlaylists = async (req, res) => {
         .populate({
           path: 'musics',
           match: { isActive: true },
-          select: 'title artist imageUrl genre platformLinks likes views userLikes isFeatured'
+          select: 'title artist imageUrl genre platformLinks likes views userLikes isFeatured metadata'
         })
         .populate({
           path: 'userId',
@@ -175,7 +178,7 @@ exports.getHotPlaylists = async (req, res) => {
 };
 
 /**
- * @route   GET /api/hot/playlists/genre/:genre
+ * @route   GET /api/hot/genre/:genre/latest
  * @desc    Belirli bir genre'nin en son playlist'ini getir
  * @access  Public
  */
@@ -237,10 +240,10 @@ exports.getLatestPlaylistByGenre = async (req, res) => {
 };
 
 /**
- * @route   GET /api/hot/playlists/category/:category
+ * @route   GET /api/hot/category/:category
  * @desc    Geriye uyumluluk için - category -> genre redirect
  * @access  Public
- * @deprecated Use /genre/:genre instead
+ * @deprecated Use /genre/:genre/latest instead
  */
 exports.getHotPlaylistByCategory = async (req, res) => {
   try {
@@ -287,7 +290,7 @@ exports.getHotStats = async (req, res) => {
           isPublic: true,
           isActive: true
         })
-          .select('name subCategory createdAt musics likes views')
+          .select('name subCategory coverImage createdAt musics likes views')
           .sort({ createdAt: -1 })
           .lean(),
 
@@ -308,6 +311,7 @@ exports.getHotStats = async (req, res) => {
               _id: latestPlaylist._id,
               name: latestPlaylist.name,
               subCategory: latestPlaylist.subCategory,
+              coverImage: latestPlaylist.coverImage || null,
               musicCount: latestPlaylist.musics?.length || 0,
               likes: latestPlaylist.likes || 0,
               views: latestPlaylist.views || 0,
@@ -369,17 +373,29 @@ exports.getHotStats = async (req, res) => {
  */
 exports.getTrendingPlaylists = async (req, res) => {
   try {
-    const { limit = 10 } = req.query;
+    const { limit = 10, genre = null } = req.query;
 
-    const trendingPlaylists = await Playlist.find({
+    const query = {
       isAdminPlaylist: true,
       isPublic: true,
       isActive: true
-    })
+    };
+
+    // Genre filtresi varsa ekle
+    if (genre) {
+      const validGenres = ['afrohouse', 'indiedance', 'organichouse', 'downtempo', 'melodichouse'];
+      const normalizedGenre = genre.toLowerCase();
+      
+      if (validGenres.includes(normalizedGenre)) {
+        query.genre = normalizedGenre;
+      }
+    }
+
+    const trendingPlaylists = await Playlist.find(query)
       .populate({
         path: 'musics',
         match: { isActive: true },
-        select: 'title artist imageUrl genre platformLinks likes views'
+        select: 'title artist imageUrl genre platformLinks likes views isFeatured'
       })
       .populate({
         path: 'userId',
@@ -418,20 +434,32 @@ exports.getTrendingPlaylists = async (req, res) => {
  */
 exports.getNewReleases = async (req, res) => {
   try {
-    const { limit = 10 } = req.query;
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const { limit = 10, days = 7, genre = null } = req.query;
+    const daysAgo = new Date();
+    daysAgo.setDate(daysAgo.getDate() - parseInt(days));
 
-    const newPlaylists = await Playlist.find({
+    const query = {
       isAdminPlaylist: true,
       isPublic: true,
       isActive: true,
-      createdAt: { $gte: sevenDaysAgo }
-    })
+      createdAt: { $gte: daysAgo }
+    };
+
+    // Genre filtresi varsa ekle
+    if (genre) {
+      const validGenres = ['afrohouse', 'indiedance', 'organichouse', 'downtempo', 'melodichouse'];
+      const normalizedGenre = genre.toLowerCase();
+      
+      if (validGenres.includes(normalizedGenre)) {
+        query.genre = normalizedGenre;
+      }
+    }
+
+    const newPlaylists = await Playlist.find(query)
       .populate({
         path: 'musics',
         match: { isActive: true },
-        select: 'title artist imageUrl genre platformLinks likes views'
+        select: 'title artist imageUrl genre platformLinks likes views isFeatured'
       })
       .populate({
         path: 'userId',
@@ -449,7 +477,7 @@ exports.getNewReleases = async (req, res) => {
         playlists: formattedPlaylists,
         count: formattedPlaylists.length,
         dateRange: {
-          from: sevenDaysAgo,
+          from: daysAgo,
           to: new Date()
         }
       },
@@ -461,6 +489,112 @@ exports.getNewReleases = async (req, res) => {
     return errorResponse(
       res,
       'Yeni playlist\'ler yüklenirken hata oluştu',
+      500,
+      err
+    );
+  }
+};
+
+/**
+ * @route   GET /api/hot/featured
+ * @desc    Öne çıkan müzikler (Featured musics)
+ * @access  Public
+ */
+exports.getFeaturedMusics = async (req, res) => {
+  try {
+    const { limit = 20, genre = null } = req.query;
+
+    const query = {
+      isFeatured: true,
+      isActive: true
+    };
+
+    // Genre filtresi varsa ekle
+    if (genre) {
+      const validGenres = ['afrohouse', 'indiedance', 'organichouse', 'downtempo', 'melodichouse'];
+      const normalizedGenre = genre.toLowerCase();
+      
+      if (validGenres.includes(normalizedGenre)) {
+        query.genre = normalizedGenre;
+      }
+    }
+
+    const featuredMusics = await Music.find(query)
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .lean();
+
+    const formattedMusics = featuredMusics.map(formatMusicData);
+
+    return successResponse(
+      res,
+      {
+        musics: formattedMusics,
+        count: formattedMusics.length
+      },
+      'Öne çıkan müzikler başarıyla getirildi'
+    );
+
+  } catch (err) {
+    console.error('❌ Get featured musics error:', err);
+    return errorResponse(
+      res,
+      'Öne çıkan müzikler yüklenirken hata oluştu',
+      500,
+      err
+    );
+  }
+};
+
+/**
+ * @route   GET /api/hot/platform-stats
+ * @desc    Platform link istatistikleri
+ * @access  Public
+ */
+exports.getPlatformStats = async (req, res) => {
+  try {
+    const genres = ['afrohouse', 'indiedance', 'organichouse', 'downtempo', 'melodichouse'];
+    const platformStats = {};
+
+    for (const genre of genres) {
+      const musics = await Music.find({ genre, isActive: true }).lean();
+      
+      platformStats[genre] = {
+        genreDisplayName: getGenreDisplayName(genre),
+        total: musics.length,
+        spotify: musics.filter(m => m.platformLinks?.spotify).length,
+        appleMusic: musics.filter(m => m.platformLinks?.appleMusic).length,
+        youtubeMusic: musics.filter(m => m.platformLinks?.youtubeMusic).length,
+        beatport: musics.filter(m => m.platformLinks?.beatport).length,
+        soundcloud: musics.filter(m => m.platformLinks?.soundcloud).length
+      };
+    }
+
+    // Genel toplam
+    const allMusics = await Music.find({ isActive: true }).lean();
+    const overallStats = {
+      total: allMusics.length,
+      spotify: allMusics.filter(m => m.platformLinks?.spotify).length,
+      appleMusic: allMusics.filter(m => m.platformLinks?.appleMusic).length,
+      youtubeMusic: allMusics.filter(m => m.platformLinks?.youtubeMusic).length,
+      beatport: allMusics.filter(m => m.platformLinks?.beatport).length,
+      soundcloud: allMusics.filter(m => m.platformLinks?.soundcloud).length
+    };
+
+    return successResponse(
+      res,
+      {
+        byGenre: platformStats,
+        overall: overallStats
+      },
+      'Platform istatistikleri başarıyla getirildi'
+    );
+
+  } catch (err) {
+    console.error('❌ Get platform stats error:', err);
+    return errorResponse(
+      res,
+      'Platform istatistikleri yüklenirken hata oluştu',
       500,
       err
     );
