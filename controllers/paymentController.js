@@ -1,254 +1,399 @@
-// controllers/paymentController.js - Güncellenmiş versiyon
-
+// controllers/paymentController.js - Clean Code Versiyonu
 const Payment = require('../models/Payment');
 const User = require('../models/userModel');
+const { google } = require('googleapis');
 const { v4: uuidv4 } = require('uuid');
 
-// ============ GOOGLE PLAY VERIFICATION ============
+// ========== CONSTANTS ==========
+const PERMANENT_ACCESS_DATE = new Date('2099-12-31');
+const PRODUCT_TYPES = {
+  IN_APP: 'in_app_product',
+  SUBSCRIPTION: 'subscription'
+};
 
-// Ana Google Play satın alma doğrulama (hem abonelik hem uygulama içi ürün)
+const PURCHASE_STATES = {
+  PURCHASED: 0,
+  CANCELED: 1
+};
+
+const PAYMENT_STATES = {
+  RECEIVED: 1
+};
+
+// ========== HELPER FUNCTIONS ==========
+/**
+ * Standart başarılı response
+ */
+const successResponse = (res, data, message = 'Success', statusCode = 200) => {
+  return res.status(statusCode).json({
+    success: true,
+    message,
+    ...data
+  });
+};
+
+/**
+ * Standart hata response
+ */
+const errorResponse = (res, message, statusCode = 500, error = null) => {
+  const response = {
+    success: false,
+    message
+  };
+
+  if (error && process.env.NODE_ENV === 'development') {
+    response.error = error.message;
+    response.stack = error.stack;
+  }
+
+  return res.status(statusCode).json(response);
+};
+
+/**
+ * Google Play Auth Client oluştur
+ */
+const getGoogleAuthClient = async () => {
+  const auth = new google.auth.GoogleAuth({
+    keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_PATH,
+    scopes: ['https://www.googleapis.com/auth/androidpublisher']
+  });
+
+  return await auth.getClient();
+};
+
+/**
+ * Android Publisher instance
+ */
+const getAndroidPublisher = () => {
+  return google.androidpublisher('v3');
+};
+
+/**
+ * User'ın subscription bilgilerini güncelle
+ */
+const updateUserSubscription = async (userId, paymentData) => {
+  const user = await User.findById(userId);
+  
+  if (!user) {
+    throw new Error('Kullanıcı bulunamadı');
+  }
+
+  user.subscription = {
+    isActive: true,
+    type: 'premium',
+    startDate: paymentData.startDate,
+    endDate: paymentData.endDate,
+    paymentMethod: 'google_play',
+    lastPaymentId: paymentData.paymentId
+  };
+
+  await user.save();
+  
+  console.log(`👤 User subscription updated: ${userId}`, {
+    startDate: paymentData.startDate,
+    endDate: paymentData.endDate,
+    isPermanent: paymentData.isPermanent
+  });
+
+  return user;
+};
+
+/**
+ * Duplicate purchase kontrolü
+ */
+const checkDuplicatePurchase = async (purchaseToken) => {
+  const existingPayment = await Payment.findByGooglePlayToken(purchaseToken);
+  
+  if (existingPayment && existingPayment.status === 'completed') {
+    console.warn('⚠️ Duplicate purchase detected:', purchaseToken);
+    return existingPayment;
+  }
+  
+  return null;
+};
+
+// ========== PURCHASE PROCESSING ==========
+/**
+ * In-App Product satın alma işleme
+ */
+const processInAppProductPurchase = async (userId, productId, orderId, purchaseToken, purchaseData) => {
+  try {
+    console.log('🛒 Processing in-app product purchase...');
+
+    // Payment kaydı oluştur
+    const payment = new Payment({
+      userId,
+      amount: 180,
+      currency: 'TRY',
+      paymentMethod: 'google_play',
+      status: 'completed',
+      transactionId: orderId,
+      googlePlayToken: purchaseToken,
+      productType: PRODUCT_TYPES.IN_APP,
+      productId,
+      subscriptionType: 'one_time',
+      startDate: new Date(parseInt(purchaseData.purchaseTimeMillis)),
+      endDate: PERMANENT_ACCESS_DATE,
+      isActive: true,
+      isPermanent: true,
+      googlePlayPurchaseState: purchaseData.purchaseState,
+      googlePlayConsumptionState: purchaseData.consumptionState,
+      receiptData: purchaseData
+    });
+
+    await payment.save();
+    console.log('💾 In-app product payment created:', payment._id);
+
+    // User'ı premium yap
+    await updateUserSubscription(userId, {
+      startDate: new Date(),
+      endDate: PERMANENT_ACCESS_DATE,
+      isPermanent: true,
+      paymentId: payment._id
+    });
+
+    return payment;
+
+  } catch (error) {
+    console.error('❌ Process in-app product error:', error);
+    throw error;
+  }
+};
+
+/**
+ * Subscription satın alma işleme
+ */
+const processSubscriptionPurchase = async (userId, productId, orderId, purchaseToken, purchaseData) => {
+  try {
+    console.log('📅 Processing subscription purchase...');
+
+    const startDate = new Date(parseInt(purchaseData.startTimeMillis));
+    const endDate = new Date(parseInt(purchaseData.expiryTimeMillis));
+
+    // Payment kaydı oluştur
+    const payment = new Payment({
+      userId,
+      amount: 180,
+      currency: 'TRY',
+      paymentMethod: 'google_play',
+      status: 'completed',
+      transactionId: orderId,
+      googlePlayToken: purchaseToken,
+      productType: PRODUCT_TYPES.SUBSCRIPTION,
+      productId,
+      subscriptionType: 'monthly',
+      startDate,
+      endDate,
+      isActive: true,
+      isPermanent: false,
+      autoRenewStatus: purchaseData.autoRenewing,
+      renewalDate: endDate,
+      receiptData: purchaseData
+    });
+
+    await payment.save();
+    console.log('💾 Subscription payment created:', payment._id);
+
+    // User subscription güncelle
+    await updateUserSubscription(userId, {
+      startDate,
+      endDate,
+      isPermanent: false,
+      paymentId: payment._id
+    });
+
+    return payment;
+
+  } catch (error) {
+    console.error('❌ Process subscription error:', error);
+    throw error;
+  }
+};
+
+/**
+ * In-App Product'ı Google Play'den doğrula
+ */
+const verifyInAppProduct = async (authClient, productId, purchaseToken) => {
+  const androidPublisher = getAndroidPublisher();
+
+  const result = await androidPublisher.purchases.products.get({
+    auth: authClient,
+    packageName: process.env.ANDROID_PACKAGE_NAME,
+    productId,
+    token: purchaseToken
+  });
+
+  const purchase = result.data;
+
+  console.log('📦 In-app product data:', {
+    purchaseState: purchase.purchaseState,
+    consumptionState: purchase.consumptionState,
+    purchaseTimeMillis: purchase.purchaseTimeMillis
+  });
+
+  // Purchase state kontrolü
+  if (purchase.purchaseState !== PURCHASE_STATES.PURCHASED) {
+    throw new Error(`Geçersiz satın alma durumu: ${purchase.purchaseState}`);
+  }
+
+  return purchase;
+};
+
+/**
+ * Subscription'ı Google Play'den doğrula
+ */
+const verifySubscription = async (authClient, productId, purchaseToken) => {
+  const androidPublisher = getAndroidPublisher();
+
+  const result = await androidPublisher.purchases.subscriptions.get({
+    auth: authClient,
+    packageName: process.env.ANDROID_PACKAGE_NAME,
+    subscriptionId: productId,
+    token: purchaseToken
+  });
+
+  const purchase = result.data;
+
+  console.log('📅 Subscription data:', {
+    paymentState: purchase.paymentState,
+    autoRenewing: purchase.autoRenewing,
+    startTimeMillis: purchase.startTimeMillis,
+    expiryTimeMillis: purchase.expiryTimeMillis
+  });
+
+  // Payment state kontrolü
+  if (purchase.paymentState !== PAYMENT_STATES.RECEIVED) {
+    throw new Error(`Geçersiz ödeme durumu: ${purchase.paymentState}`);
+  }
+
+  return purchase;
+};
+
+// ========== MAIN CONTROLLERS ==========
+/**
+ * @route   POST /api/payments/verify-google-play
+ * @desc    Google Play satın alma doğrulama
+ * @access  Private
+ */
 exports.verifyGooglePlayPurchase = async (req, res) => {
   try {
     const userId = req.userId || req.user?.id;
     const { purchaseToken, productId, orderId, purchaseType } = req.body;
 
-    console.log('🔔 Google Play purchase verification başlatılıyor:', {
+    console.log('🔔 Google Play verification started:', {
       userId,
       productId,
       orderId,
       purchaseType
     });
 
-    // Önceki aynı purchase token kontrolü
-    const existingPayment = await Payment.findByGooglePlayToken(purchaseToken);
-    if (existingPayment && existingPayment.status === 'completed') {
-      console.log('⚠️ Bu purchase token zaten kullanıldı:', purchaseToken);
-      return res.status(400).json({
-        success: false,
-        message: 'Bu satın alma zaten işlenmiş'
-      });
+    // Validation
+    if (!userId) {
+      return errorResponse(res, 'Kullanıcı kimliği gerekli', 401);
     }
 
-    // Google Play Developer API ile doğrulama
-    const { google } = require('googleapis');
-    const androidpublisher = google.androidpublisher('v3');
-    
-    // Service account credentials
-    const auth = new google.auth.GoogleAuth({
-      keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_PATH,
-      scopes: ['https://www.googleapis.com/auth/androidpublisher']
-    });
+    if (!purchaseToken || !productId || !orderId) {
+      return errorResponse(res, 'Eksik satın alma bilgileri', 400);
+    }
 
-    const authClient = await auth.getClient();
+    // Duplicate kontrolü
+    const duplicatePayment = await checkDuplicatePurchase(purchaseToken);
+    if (duplicatePayment) {
+      return errorResponse(res, 'Bu satın alma zaten işlenmiş', 400);
+    }
+
+    // Google Auth Client
+    const authClient = await getGoogleAuthClient();
+
+    // Ürün türüne göre doğrulama
     let purchase;
-    let productType;
+    let actualProductType;
 
-    // Ürün türüne göre doğrulama yöntemi seç
-    if (purchaseType === 'in_app_product' || productId === 'dj_app_premium_access') {
-      console.log('🛒 Uygulama içi ürün doğrulaması...');
-      productType = 'in_app_product';
-      
-      const result = await androidpublisher.purchases.products.get({
-        auth: authClient,
-        packageName: process.env.ANDROID_PACKAGE_NAME,
-        productId: productId,
-        token: purchaseToken
-      });
-
-      purchase = result.data;
-      console.log('📦 Uygulama içi ürün satın alma data:', {
-        purchaseState: purchase.purchaseState,
-        consumptionState: purchase.consumptionState,
-        purchaseTimeMillis: purchase.purchaseTimeMillis
-      });
-
-      // Satın alma durumu kontrolü (0 = Purchased, 1 = Canceled)
-      if (purchase.purchaseState === 0) {
-        await processInAppProductPurchase(userId, productId, orderId, purchaseToken, purchase);
-      } else {
-        throw new Error(`Uygulama içi ürün satın alma durumu geçersiz: ${purchase.purchaseState}`);
-      }
+    if (purchaseType === PRODUCT_TYPES.IN_APP || productId === 'dj_app_premium_access') {
+      // In-App Product
+      actualProductType = PRODUCT_TYPES.IN_APP;
+      purchase = await verifyInAppProduct(authClient, productId, purchaseToken);
+      await processInAppProductPurchase(userId, productId, orderId, purchaseToken, purchase);
 
     } else {
-      console.log('📅 Abonelik doğrulaması...');
-      productType = 'subscription';
-      
-      const result = await androidpublisher.purchases.subscriptions.get({
-        auth: authClient,
-        packageName: process.env.ANDROID_PACKAGE_NAME,
-        subscriptionId: productId,
-        token: purchaseToken
-      });
-
-      purchase = result.data;
-      console.log('📅 Abonelik satın alma data:', {
-        paymentState: purchase.paymentState,
-        autoRenewing: purchase.autoRenewing,
-        startTimeMillis: purchase.startTimeMillis,
-        expiryTimeMillis: purchase.expiryTimeMillis
-      });
-
-      // Abonelik durumu kontrolü (1 = Received)
-      if (purchase.paymentState === 1) {
-        await processSubscriptionPurchase(userId, productId, orderId, purchaseToken, purchase);
-      } else {
-        throw new Error(`Abonelik ödeme durumu geçersiz: ${purchase.paymentState}`);
-      }
+      // Subscription
+      actualProductType = PRODUCT_TYPES.SUBSCRIPTION;
+      purchase = await verifySubscription(authClient, productId, purchaseToken);
+      await processSubscriptionPurchase(userId, productId, orderId, purchaseToken, purchase);
     }
 
-    res.json({
-      success: true,
-      message: 'Ödeme başarıyla doğrulandı ve işlendi!',
-      productType: productType,
-      productId: productId
-    });
+    return successResponse(
+      res,
+      {
+        productType: actualProductType,
+        productId
+      },
+      'Ödeme başarıyla doğrulandı ve işlendi!'
+    );
 
   } catch (error) {
     console.error('❌ Payment verification error:', error);
-    
-    let errorMessage = 'Ödeme doğrulanamadı';
+
+    // Error mapping
+    let message = 'Ödeme doğrulanamadı';
     let statusCode = 400;
 
     if (error.message.includes('Invalid purchase token')) {
-      errorMessage = 'Geçersiz satın alma bilgisi';
+      message = 'Geçersiz satın alma bilgisi';
     } else if (error.message.includes('not found')) {
-      errorMessage = 'Satın alma kaydı bulunamadı';
+      message = 'Satın alma kaydı bulunamadı';
     } else if (error.message.includes('geçersiz')) {
-      errorMessage = error.message;
+      message = error.message;
     } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-      errorMessage = 'Google Play API bağlantı hatası';
+      message = 'Google Play API bağlantı hatası';
       statusCode = 503;
     }
 
-    res.status(statusCode).json({
-      success: false,
-      message: errorMessage,
-      error: process.env.NODE_ENV === 'development' ? error.message : errorMessage
-    });
+    return errorResponse(res, message, statusCode, error);
   }
 };
 
-// ============ PURCHASE PROCESSING FUNCTIONS ============
-
-// Uygulama içi ürün satın alma işleme
-async function processInAppProductPurchase(userId, productId, orderId, purchaseToken, purchaseData) {
-  console.log('🛒 Uygulama içi ürün işleniyor...');
-
-  // Payment kaydı oluştur
-  const payment = new Payment({
-    userId,
-    amount: 180,
-    currency: 'TRY',
-    paymentMethod: 'google_play',
-    status: 'completed',
-    transactionId: orderId,
-    googlePlayToken: purchaseToken,
-    productType: 'in_app_product',
-    productId: productId,
-    subscriptionType: 'one_time',
-    startDate: new Date(parseInt(purchaseData.purchaseTimeMillis)),
-    endDate: new Date('2099-12-31'), // Kalıcı erişim
-    isActive: true,
-    isPermanent: true,
-    googlePlayPurchaseState: purchaseData.purchaseState,
-    googlePlayConsumptionState: purchaseData.consumptionState,
-    receiptData: purchaseData
-  });
-
-  await payment.save();
-  console.log('💾 Uygulama içi ürün payment kaydı oluşturuldu:', payment._id);
-
-  // User'ı premium yap (kalıcı erişim)
-  const user = await User.findById(userId);
-  user.subscription = {
-    isActive: true,
-    type: 'premium',
-    startDate: new Date(),
-    endDate: new Date('2099-12-31'), // Kalıcı erişim
-    paymentMethod: 'google_play',
-    lastPaymentId: payment._id
-  };
-  
-  await user.save();
-  console.log('👤 User premium erişim verildi (kalıcı):', userId);
-
-  return payment;
-}
-
-// Abonelik satın alma işleme
-async function processSubscriptionPurchase(userId, productId, orderId, purchaseToken, purchaseData) {
-  console.log('📅 Abonelik işleniyor...');
-
-  // Payment kaydı oluştur
-  const payment = new Payment({
-    userId,
-    amount: 180,
-    currency: 'TRY',
-    paymentMethod: 'google_play',
-    status: 'completed',
-    transactionId: orderId,
-    googlePlayToken: purchaseToken,
-    productType: 'subscription',
-    productId: productId,
-    subscriptionType: 'monthly',
-    startDate: new Date(parseInt(purchaseData.startTimeMillis)),
-    endDate: new Date(parseInt(purchaseData.expiryTimeMillis)),
-    isActive: true,
-    isPermanent: false,
-    autoRenewStatus: purchaseData.autoRenewing,
-    renewalDate: new Date(parseInt(purchaseData.expiryTimeMillis)),
-    receiptData: purchaseData
-  });
-
-  await payment.save();
-  console.log('💾 Abonelik payment kaydı oluşturuldu:', payment._id);
-
-  // User subscription güncelle
-  const user = await User.findById(userId);
-  user.subscription = {
-    isActive: true,
-    type: 'premium',
-    startDate: new Date(parseInt(purchaseData.startTimeMillis)),
-    endDate: new Date(parseInt(purchaseData.expiryTimeMillis)),
-    paymentMethod: 'google_play',
-    lastPaymentId: payment._id
-  };
-  
-  await user.save();
-  console.log('👤 User abonelik verildi:', userId);
-
-  return payment;
-}
-
-// ============ STATUS CHECK FUNCTIONS ============
-
-// Kullanıcının premium/abonelik durumunu kontrol et
+/**
+ * @route   GET /api/payments/subscription-status
+ * @desc    Kullanıcının subscription durumunu getir
+ * @access  Private
+ */
 exports.getSubscriptionStatus = async (req, res) => {
   try {
     const userId = req.userId || req.user?.id;
-    
+
+    if (!userId) {
+      return errorResponse(res, 'Kullanıcı kimliği gerekli', 401);
+    }
+
+    // User bilgisi
     const user = await User.findById(userId)
       .select('subscription')
       .populate('subscription.lastPaymentId');
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'Kullanıcı bulunamadı'
-      });
+      return errorResponse(res, 'Kullanıcı bulunamadı', 404);
     }
 
-    // Aktif ödemeleri kontrol et
+    // Aktif ödemeler
     const activePayments = await Payment.findActiveUserPayments(userId);
-    
-    // Premium durumu hesapla
+
+    // Premium durumu
     const hasPermanentAccess = activePayments.some(p => p.isPermanent);
     const hasActiveSubscription = activePayments.some(p => !p.isPermanent && !p.isExpired);
-    const isPremium = hasPermanentAccess || hasActiveSubscription || 
-                     (user.subscription.isActive && user.subscription.endDate && new Date() < user.subscription.endDate);
+    const isPremium = hasPermanentAccess || hasActiveSubscription ||
+      (user.subscription.isActive && user.subscription.endDate && new Date() < user.subscription.endDate);
 
-    // En son ödeme bilgisi
+    // En son ödeme
     const latestPayment = activePayments.length > 0 ? activePayments[0] : null;
+
+    // Days remaining hesapla
+    let daysRemaining = 0;
+    if (isPremium && !hasPermanentAccess && user.subscription.endDate) {
+      daysRemaining = Math.ceil((user.subscription.endDate - new Date()) / (1000 * 60 * 60 * 24));
+    } else if (hasPermanentAccess) {
+      daysRemaining = -1; // -1 = permanent
+    }
 
     const subscription = {
       ...user.subscription.toObject(),
@@ -257,45 +402,42 @@ exports.getSubscriptionStatus = async (req, res) => {
       hasActiveSubscription,
       activePaymentsCount: activePayments.length,
       latestPayment: latestPayment ? latestPayment.getDisplayInfo() : null,
-      daysRemaining: isPremium && !hasPermanentAccess ? 
-        Math.ceil((user.subscription.endDate - new Date()) / (1000 * 60 * 60 * 24)) : 
-        (hasPermanentAccess ? -1 : 0) // -1 = kalıcı erişim
+      daysRemaining
     };
 
-    console.log('👤 User subscription status checked:', {
+    console.log('👤 Subscription status checked:', {
       userId,
       isPremium,
       hasPermanentAccess,
-      hasActiveSubscription,
-      activePaymentsCount: activePayments.length
+      hasActiveSubscription
     });
 
-    res.json({
-      success: true,
-      subscription
-    });
+    return successResponse(res, { subscription });
 
   } catch (error) {
-    console.error('❌ Get subscription error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Premium durumu alınamadı',
-      error: error.message
-    });
+    console.error('❌ Get subscription status error:', error);
+    return errorResponse(res, 'Premium durumu alınamadı', 500, error);
   }
 };
 
-// Hızlı premium kontrolü
+/**
+ * @route   GET /api/payments/quick-check
+ * @desc    Hızlı premium kontrolü
+ * @access  Private
+ */
 exports.quickPremiumCheck = async (req, res) => {
   try {
     const userId = req.userId || req.user?.id;
-    
+
+    if (!userId) {
+      return errorResponse(res, 'Kullanıcı kimliği gerekli', 401);
+    }
+
     const activePayments = await Payment.findActiveUserPayments(userId);
     const isPremium = activePayments.length > 0;
     const hasPermanentAccess = activePayments.some(p => p.isPermanent);
 
-    res.json({
-      success: true,
+    return successResponse(res, {
       isPremium,
       hasPermanentAccess,
       accessType: hasPermanentAccess ? 'permanent' : 'subscription'
@@ -303,122 +445,247 @@ exports.quickPremiumCheck = async (req, res) => {
 
   } catch (error) {
     console.error('❌ Quick premium check error:', error);
-    res.status(500).json({
-      success: false,
-      isPremium: false
-    });
+    return successResponse(res, { isPremium: false });
   }
 };
 
-// Kullanıcının aktif ödemelerini listele
+/**
+ * @route   GET /api/payments/active
+ * @desc    Kullanıcının aktif ödemelerini listele
+ * @access  Private
+ */
 exports.getActivePayments = async (req, res) => {
   try {
     const userId = req.userId || req.user?.id;
-    
+
+    if (!userId) {
+      return errorResponse(res, 'Kullanıcı kimliği gerekli', 401);
+    }
+
     const activePayments = await Payment.findActiveUserPayments(userId);
-    
-    res.json({
-      success: true,
+
+    return successResponse(res, {
       count: activePayments.length,
       payments: activePayments.map(p => p.getDisplayInfo())
     });
 
   } catch (error) {
     console.error('❌ Get active payments error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    return errorResponse(res, 'Aktif ödemeler alınamadı', 500, error);
   }
 };
 
-// ============ PAYMENT HISTORY ============
-
-// Ödeme geçmişi
+/**
+ * @route   GET /api/payments/history
+ * @desc    Ödeme geçmişi
+ * @access  Private
+ */
 exports.getPaymentHistory = async (req, res) => {
   try {
     const userId = req.userId || req.user?.id;
     const { page = 1, limit = 10, status, productType } = req.query;
-    
+
+    if (!userId) {
+      return errorResponse(res, 'Kullanıcı kimliği gerekli', 401);
+    }
+
     const filter = { userId };
     if (status) filter.status = status;
     if (productType) filter.productType = productType;
-    
-    const payments = await Payment.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
-      .select('-receiptData -googlePlayToken'); // Hassas veriyi gizle
 
-    const total = await Payment.countDocuments(filter);
+    const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    res.json({
-      success: true,
-      payments: payments.map(p => p.getDisplayInfo()),
+    const [payments, total] = await Promise.all([
+      Payment.find(filter)
+        .sort({ createdAt: -1 })
+        .limit(parseInt(limit))
+        .skip(skip)
+        .select('-receiptData -googlePlayToken')
+        .lean(),
+      Payment.countDocuments(filter)
+    ]);
+
+    return successResponse(res, {
+      payments: payments.map(p => ({
+        _id: p._id,
+        amount: p.amount,
+        currency: p.currency,
+        status: p.status,
+        productType: p.productType,
+        productId: p.productId,
+        startDate: p.startDate,
+        endDate: p.endDate,
+        isPermanent: p.isPermanent,
+        createdAt: p.createdAt
+      })),
       pagination: {
         currentPage: parseInt(page),
-        totalPages: Math.ceil(total / limit),
-        totalItems: total
+        totalPages: Math.ceil(total / parseInt(limit)),
+        totalItems: total,
+        itemsPerPage: parseInt(limit)
       }
     });
 
   } catch (error) {
     console.error('❌ Get payment history error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Ödeme geçmişi alınamadı',
-      error: error.message
-    });
+    return errorResponse(res, 'Ödeme geçmişi alınamadı', 500, error);
   }
 };
 
-// Belirli bir ödeme detayı
+/**
+ * @route   GET /api/payments/:paymentId
+ * @desc    Belirli bir ödeme detayı
+ * @access  Private
+ */
 exports.getPaymentDetails = async (req, res) => {
   try {
     const userId = req.userId || req.user?.id;
     const { paymentId } = req.params;
-    
+
+    if (!userId) {
+      return errorResponse(res, 'Kullanıcı kimliği gerekli', 401);
+    }
+
     const payment = await Payment.findOne({
       _id: paymentId,
-      userId: userId
+      userId
     });
-    
+
     if (!payment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Ödeme bulunamadı'
-      });
+      return errorResponse(res, 'Ödeme bulunamadı', 404);
     }
-    
-    res.json({
-      success: true,
+
+    return successResponse(res, {
       payment: payment.getDisplayInfo()
     });
 
   } catch (error) {
     console.error('❌ Get payment details error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    return errorResponse(res, 'Ödeme detayı alınamadı', 500, error);
   }
 };
 
-// ============ TEST FUNCTIONS ============
+// ========== VERIFICATION HELPERS ==========
+/**
+ * @route   POST /api/payments/verify-subscription
+ * @desc    Google Play subscription durumu sorgulama
+ * @access  Private
+ */
+exports.verifyGooglePlaySubscription = async (req, res) => {
+  try {
+    const { subscriptionId, purchaseToken } = req.body;
 
-// Test premium aktivasyonu
+    if (!subscriptionId || !purchaseToken) {
+      return errorResponse(res, 'Subscription ID ve purchase token gerekli', 400);
+    }
+
+    console.log('📅 Querying Google Play subscription:', { subscriptionId });
+
+    const authClient = await getGoogleAuthClient();
+    const androidPublisher = getAndroidPublisher();
+
+    const result = await androidPublisher.purchases.subscriptions.get({
+      auth: authClient,
+      packageName: process.env.ANDROID_PACKAGE_NAME,
+      subscriptionId,
+      token: purchaseToken
+    });
+
+    const subscription = result.data;
+
+    const subscriptionInfo = {
+      isActive: subscription.paymentState === PAYMENT_STATES.RECEIVED,
+      autoRenewing: subscription.autoRenewing,
+      startTime: new Date(parseInt(subscription.startTimeMillis)),
+      expiryTime: new Date(parseInt(subscription.expiryTimeMillis)),
+      paymentState: subscription.paymentState,
+      cancelReason: subscription.cancelReason || null,
+      userCancellationTime: subscription.userCancellationTimeMillis
+        ? new Date(parseInt(subscription.userCancellationTimeMillis))
+        : null
+    };
+
+    console.log('📅 Subscription info:', subscriptionInfo);
+
+    return successResponse(res, { subscription: subscriptionInfo });
+
+  } catch (error) {
+    console.error('❌ Verify subscription error:', error);
+    return errorResponse(res, 'Abonelik durumu sorgulanamadı', 500, error);
+  }
+};
+
+/**
+ * @route   POST /api/payments/verify-token
+ * @desc    Purchase token doğrulama
+ * @access  Private
+ */
+exports.verifyPurchaseToken = async (req, res) => {
+  try {
+    const { purchaseToken } = req.body;
+
+    if (!purchaseToken) {
+      return errorResponse(res, 'Purchase token gerekli', 400);
+    }
+
+    console.log('🔍 Verifying purchase token...');
+
+    const existingPayment = await Payment.findByGooglePlayToken(purchaseToken);
+
+    if (existingPayment) {
+      console.log('✅ Purchase token found:', {
+        paymentId: existingPayment._id,
+        status: existingPayment.status,
+        isActive: existingPayment.isActive
+      });
+
+      return successResponse(res, {
+        exists: true,
+        payment: existingPayment.getDisplayInfo()
+      });
+    } else {
+      console.log('❌ Purchase token not found');
+
+      return successResponse(res, {
+        exists: false,
+        message: 'Bu purchase token ile ödeme kaydı bulunamadı'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Verify token error:', error);
+    return errorResponse(res, 'Token doğrulanamadı', 500, error);
+  }
+};
+
+// ========== TEST FUNCTIONS ==========
+/**
+ * @route   POST /api/payments/test/activate-premium
+ * @desc    Test premium aktivasyonu
+ * @access  Private (Development only)
+ */
 exports.activateTestPremium = async (req, res) => {
   try {
+    // Production'da devre dışı
+    if (process.env.NODE_ENV === 'production') {
+      return errorResponse(res, 'Bu endpoint production\'da kullanılamaz', 403);
+    }
+
     const userId = req.userId || req.user?.id;
-    const { duration = 'permanent', productType = 'in_app_product' } = req.body;
+    const { duration = 'permanent', productType = PRODUCT_TYPES.IN_APP } = req.body;
+
+    if (!userId) {
+      return errorResponse(res, 'Kullanıcı kimliği gerekli', 401);
+    }
 
     console.log('🧪 Test premium activation:', { userId, duration, productType });
 
+    // End date hesapla
     let endDate;
     let isPermanent = false;
-    
+
     if (duration === 'permanent') {
-      endDate = new Date('2099-12-31');
+      endDate = PERMANENT_ACCESS_DATE;
       isPermanent = true;
     } else if (duration === '1y') {
       endDate = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
@@ -426,7 +693,7 @@ exports.activateTestPremium = async (req, res) => {
       endDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     }
 
-    // Test payment kaydı oluştur
+    // Test payment oluştur
     const testPayment = new Payment({
       userId,
       amount: 180,
@@ -434,30 +701,28 @@ exports.activateTestPremium = async (req, res) => {
       paymentMethod: 'test',
       status: 'completed',
       transactionId: `test_${productType}_${Date.now()}`,
-      productType: productType,
-      productId: productType === 'in_app_product' ? 'dj_app_premium_access' : 'dj_app_monthly_10_euro',
+      productType,
+      productId: productType === PRODUCT_TYPES.IN_APP
+        ? 'dj_app_premium_access'
+        : 'dj_app_monthly_10_euro',
       subscriptionType: isPermanent ? 'one_time' : 'monthly',
       startDate: new Date(),
-      endDate: endDate,
+      endDate,
       isActive: true,
-      isPermanent: isPermanent,
+      isPermanent,
       isTestPurchase: true
     });
 
     await testPayment.save();
 
-    // User subscription güncelle
-    user.subscription = {
-      isActive: true,
-      type: 'premium',
+    // User güncelle
+    const user = await updateUserSubscription(userId, {
       startDate: new Date(),
-      endDate: endDate,
-      paymentMethod: 'test',
-      lastPaymentId: testPayment._id
-    };
-    
-    await user.save();
-    
+      endDate,
+      isPermanent,
+      paymentId: testPayment._id
+    });
+
     console.log('✅ Test premium activated:', {
       userId,
       paymentId: testPayment._id,
@@ -465,150 +730,42 @@ exports.activateTestPremium = async (req, res) => {
       isPermanent,
       endDate
     });
-    
-    res.json({ 
-      success: true, 
-      message: `Test premium activated (${duration}, ${productType})`,
-      subscription: user.subscription,
-      payment: testPayment.getDisplayInfo()
-    });
-    
+
+    return successResponse(
+      res,
+      {
+        subscription: user.subscription,
+        payment: testPayment.getDisplayInfo()
+      },
+      `Test premium activated (${duration}, ${productType})`
+    );
+
   } catch (error) {
     console.error('❌ Test premium activation error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    return errorResponse(res, 'Test premium aktivasyonu başarısız', 500, error);
   }
 };
 
-// ============ ADDITIONAL VERIFICATION FUNCTIONS ============
-
-// Google Play abonelik durumu sorgulama
-exports.verifyGooglePlaySubscription = async (req, res) => {
-  try {
-    const { subscriptionId, purchaseToken } = req.body;
-    
-    console.log('📅 Google Play abonelik durumu sorgulanıyor:', {
-      subscriptionId,
-      purchaseToken: purchaseToken ? 'present' : 'missing'
-    });
-
-    // Google Play Developer API
-    const { google } = require('googleapis');
-    const androidpublisher = google.androidpublisher('v3');
-    
-    const auth = new google.auth.GoogleAuth({
-      keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_PATH,
-      scopes: ['https://www.googleapis.com/auth/androidpublisher']
-    });
-
-    const authClient = await auth.getClient();
-    
-    const result = await androidpublisher.purchases.subscriptions.get({
-      auth: authClient,
-      packageName: process.env.ANDROID_PACKAGE_NAME,
-      subscriptionId: subscriptionId,
-      token: purchaseToken
-    });
-
-    const subscription = result.data;
-    
-    const subscriptionInfo = {
-      isActive: subscription.paymentState === 1,
-      autoRenewing: subscription.autoRenewing,
-      startTime: new Date(parseInt(subscription.startTimeMillis)),
-      expiryTime: new Date(parseInt(subscription.expiryTimeMillis)),
-      paymentState: subscription.paymentState,
-      cancelReason: subscription.cancelReason,
-      userCancellationTimeMillis: subscription.userCancellationTimeMillis
-    };
-
-    console.log('📅 Google Play abonelik bilgisi:', subscriptionInfo);
-
-    res.json({
-      success: true,
-      subscription: subscriptionInfo
-    });
-
-  } catch (error) {
-    console.error('❌ Google Play abonelik sorgu hatası:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Abonelik durumu sorgulanamadı',
-      error: error.message
-    });
-  }
-};
-
-// Purchase token ile doğrulama
-exports.verifyPurchaseToken = async (req, res) => {
-  try {
-    const { purchaseToken } = req.body;
-    
-    console.log('🔍 Purchase token doğrulanıyor...');
-
-    // Veritabanında bu token ile ödeme var mı kontrol et
-    const existingPayment = await Payment.findByGooglePlayToken(purchaseToken);
-    
-    if (existingPayment) {
-      console.log('✅ Purchase token bulundu:', {
-        paymentId: existingPayment._id,
-        status: existingPayment.status,
-        isActive: existingPayment.isActive
-      });
-
-      res.json({
-        success: true,
-        exists: true,
-        payment: existingPayment.getDisplayInfo()
-      });
-    } else {
-      console.log('❌ Purchase token bulunamadı');
-      
-      res.json({
-        success: true,
-        exists: false,
-        message: 'Bu purchase token ile ödeme kaydı bulunamadı'
-      });
-    }
-
-  } catch (error) {
-    console.error('❌ Purchase token verification error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-};
-
-// ============ WEBHOOK HANDLERS (İleride kullanım için) ============
-
-// Google Play webhook handler
+// ========== WEBHOOK HANDLERS ==========
+/**
+ * @route   POST /api/payments/webhook/google-play
+ * @desc    Google Play webhook handler
+ * @access  Public (Webhook)
+ */
 exports.handleGooglePlayWebhook = async (req, res) => {
   try {
-    console.log('🔔 Google Play webhook alındı:', req.body);
-    
-    // Webhook doğrulama ve işleme burada yapılacak
-    // Real-time subscription updates için kullanılabilir
-    
-    res.status(200).json({ success: true });
-    
+    console.log('🔔 Google Play webhook received:', req.body);
+
+    // TODO: Webhook signature validation
+    // TODO: Real-time subscription updates
+    // TODO: Event processing (renewed, canceled, expired, etc.)
+
+    return res.status(200).json({ success: true });
+
   } catch (error) {
     console.error('❌ Google Play webhook error:', error);
-    res.status(500).json({ success: false });
+    return res.status(500).json({ success: false });
   }
 };
 
-module.exports = {
-  verifyGooglePlayPurchase: exports.verifyGooglePlayPurchase,
-  verifyGooglePlaySubscription: exports.verifyGooglePlaySubscription,
-  verifyPurchaseToken: exports.verifyPurchaseToken,
-  getSubscriptionStatus: exports.getSubscriptionStatus,
-  quickPremiumCheck: exports.quickPremiumCheck,
-  getActivePayments: exports.getActivePayments,
-  getPaymentHistory: exports.getPaymentHistory,
-  getPaymentDetails: exports.getPaymentDetails,
-  activateTestPremium: exports.activateTestPremium,
-  handleGooglePlayWebhook: exports.handleGooglePlayWebhook
-};
+module.exports = exports;
