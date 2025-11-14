@@ -1,4 +1,4 @@
-// app.js - Complete Production Ready (Platform Links System)
+// app.js - Complete Production Ready (Platform Links System + Settings)
 const express = require('express');
 const mongoose = require('mongoose');
 const dotenv = require('dotenv');
@@ -99,7 +99,7 @@ app.get('/', (req, res) => {
     status: 'active',
     message: 'TrackBang API Server is running! 🎵',
     version: '2.0.0',
-    system: 'Platform Links System',
+    system: 'Platform Links System + User Settings',
     timestamp: new Date().toISOString(),
     uptime: {
       seconds: uptime,
@@ -114,7 +114,8 @@ app.get('/', (req, res) => {
     },
     features: {
       platformLinks: ['Spotify', 'Apple Music', 'YouTube Music', 'Beatport', 'SoundCloud'],
-      genres: ['Afro House', 'Indie Dance', 'Organic House', 'Down Tempo', 'Melodic House']
+      genres: ['Afro House', 'Indie Dance', 'Organic House', 'Down Tempo', 'Melodic House'],
+      newFeatures: ['User Settings', 'Platform Preferences', 'App Settings']
     }
   };
 
@@ -238,6 +239,14 @@ app.get('/', (req, res) => {
                 font-size: 0.85rem;
                 font-weight: 500;
             }
+            .feature-tag.new {
+                background: #22c55e;
+                animation: glow 2s infinite;
+            }
+            @keyframes glow {
+                0%, 100% { box-shadow: 0 0 5px rgba(34, 197, 94, 0.5); }
+                50% { box-shadow: 0 0 20px rgba(34, 197, 94, 0.8); }
+            }
             .endpoints {
                 background: #1e293b;
                 color: white;
@@ -264,6 +273,9 @@ app.get('/', (req, res) => {
             }
             .endpoint-item:hover {
                 background: rgba(255,255,255,0.2);
+            }
+            .endpoint-item.new {
+                border-left-color: #22c55e;
             }
             .timestamp {
                 text-align: center;
@@ -310,6 +322,7 @@ app.get('/', (req, res) => {
                 <div class="feature-list">
                     ${serverInfo.features.platformLinks.map(p => `<span class="feature-tag">${p}</span>`).join('')}
                     ${serverInfo.features.genres.map(g => `<span class="feature-tag">${g}</span>`).join('')}
+                    ${serverInfo.features.newFeatures.map(f => `<span class="feature-tag new">✨ ${f}</span>`).join('')}
                 </div>
             </div>
             
@@ -321,6 +334,12 @@ app.get('/', (req, res) => {
                     <div class="endpoint-item">GET /api/playlists → Playlists API</div>
                     <div class="endpoint-item">GET /api/hot → HOT Page</div>
                     <div class="endpoint-item">GET /api/search → Search API</div>
+                    <div class="endpoint-item new">GET /api/settings → User Settings API ✨</div>
+                    <div class="endpoint-item new">GET /api/settings/platform-preferences ✨</div>
+                    <div class="endpoint-item new">PUT /api/settings/platform-preferences ✨</div>
+                    <div class="endpoint-item new">GET /api/settings/app-settings ✨</div>
+                    <div class="endpoint-item">GET /api/store → Store API</div>
+                    <div class="endpoint-item">GET /api/notifications → Notifications API</div>
                 </div>
             </div>
             
@@ -385,7 +404,9 @@ const sampleRoutes = require('./routes/sampleRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const storeRoutes = require('./routes/storeRoutes');
 const messageRoutes = require('./routes/messageRoutes');
+const settingsRoutes = require('./routes/settingsRoutes'); // YENİ EKLENEN
 
+// Route registrations
 app.use('/api/payments', paymentRoutes);
 app.use('/api/music', musicRoutes);
 app.use('/api/playlists', playlistRoutes);
@@ -396,9 +417,11 @@ app.use('/api/download', downloadRoutes);
 app.use('/api/samples', sampleRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/settings', settingsRoutes); // YENİ EKLENEN
 app.use('/api', authRoutes);
 
 console.log('✅ API routes loaded');
+console.log('✅ Settings routes registered: /api/settings'); // YENİ LOG
 
 // ========== MONGODB CONNECTION ==========
 
@@ -496,6 +519,7 @@ const startServer = async () => {
       console.log(`🌐 PORT: ${PORT}`);
       console.log(`📚 URL: http://localhost:${PORT}`);
       console.log(`💚 Health: http://localhost:${PORT}/health`);
+      console.log(`⚙️ Settings: http://localhost:${PORT}/api/settings/health`);
       console.log('🎉 ========================================');
       console.log('');
     });

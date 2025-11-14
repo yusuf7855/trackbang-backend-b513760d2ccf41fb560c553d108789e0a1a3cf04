@@ -1,4 +1,4 @@
-// models/userModel.js - Music Sistemi ile Güncellenmiş Versiyon
+// models/userModel.js - Music Sistemi + Platform Preferences ile Güncellenmiş Versiyon
 
 const mongoose = require('mongoose');
 
@@ -140,6 +140,46 @@ const userSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId, 
     ref: 'User' 
   }],
+  
+  // ========== PLATFORM PREFERENCES (YENİ) ==========
+  platformPreferences: {
+    spotify: {
+      type: Boolean,
+      default: true
+    },
+    appleMusic: {
+      type: Boolean,
+      default: true
+    },
+    youtubeMusic: {
+      type: Boolean,
+      default: true
+    },
+    beatport: {
+      type: Boolean,
+      default: true
+    },
+    soundcloud: {
+      type: Boolean,
+      default: true
+    }
+  },
+
+  // ========== APP SETTINGS (YENİ) ==========
+  appSettings: {
+    notificationsEnabled: {
+      type: Boolean,
+      default: true
+    },
+    autoPlayEnabled: {
+      type: Boolean,
+      default: false
+    },
+    darkMode: {
+      type: Boolean,
+      default: true
+    }
+  },
   
   // ========== MÜZİK TERCİHLERİ VE AKTİVİTE ==========
   musicPreferences: {
@@ -450,6 +490,40 @@ userSchema.methods.updateMusicActivity = async function(activityType) {
       break;
   }
   
+  return await this.save();
+};
+
+/**
+ * Platform preferences güncelle (YENİ METHOD)
+ */
+userSchema.methods.updatePlatformPreferences = async function(preferences) {
+  if (!this.platformPreferences) {
+    this.platformPreferences = {};
+  }
+  
+  if (preferences.spotify !== undefined) this.platformPreferences.spotify = preferences.spotify;
+  if (preferences.appleMusic !== undefined) this.platformPreferences.appleMusic = preferences.appleMusic;
+  if (preferences.youtubeMusic !== undefined) this.platformPreferences.youtubeMusic = preferences.youtubeMusic;
+  if (preferences.beatport !== undefined) this.platformPreferences.beatport = preferences.beatport;
+  if (preferences.soundcloud !== undefined) this.platformPreferences.soundcloud = preferences.soundcloud;
+  
+  this.markModified('platformPreferences');
+  return await this.save();
+};
+
+/**
+ * App settings güncelle (YENİ METHOD)
+ */
+userSchema.methods.updateAppSettings = async function(settings) {
+  if (!this.appSettings) {
+    this.appSettings = {};
+  }
+  
+  if (settings.notificationsEnabled !== undefined) this.appSettings.notificationsEnabled = settings.notificationsEnabled;
+  if (settings.autoPlayEnabled !== undefined) this.appSettings.autoPlayEnabled = settings.autoPlayEnabled;
+  if (settings.darkMode !== undefined) this.appSettings.darkMode = settings.darkMode;
+  
+  this.markModified('appSettings');
   return await this.save();
 };
 
