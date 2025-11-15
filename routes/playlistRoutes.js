@@ -1,8 +1,37 @@
-// routes/playlistRoutes.js - Clean Code Versiyonu
+// routes/playlistRoutes.js - Complete Playlist Management System
 const express = require('express');
 const router = express.Router();
 const playlistController = require('../controllers/playlistController');
 const authMiddleware = require('../middlewares/authMiddleware');
+const multer = require('multer');
+const path = require('path');
+
+// ========== MULTER CONFIGURATION FOR PLAYLIST COVERS ==========
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/playlist-covers/');
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'playlist-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (extname && mimetype) {
+      cb(null, true);
+    } else {
+      cb(new Error('Sadece resim dosyaları yüklenebilir (jpg, png, gif, webp)'));
+    }
+  }
+});
 
 // ========== PUBLIC ROUTES ==========
 
@@ -33,6 +62,13 @@ router.get('/category/:category', playlistController.getPlaylistsByCategory);
  * @access  Public
  */
 router.get('/user/:userId', playlistController.getUserPlaylists);
+
+/**
+ * @route   GET /api/playlists/:id
+ * @desc    Belirli bir playlist'in detaylarını getir
+ * @access  Public
+ */
+router.get('/:id', playlistController.getPlaylistById);
 
 /**
  * @route   GET /api/playlists/following/:userId
@@ -100,30 +136,111 @@ router.delete('/admin/:id', playlistController.deleteAdminPlaylist);
 
 /**
  * @route   POST /api/playlists
- * @desc    User playlist oluştur
+ * @desc    User playlist oluştur (Cover image ile veya otomatik)
  * @access  Private
  */
-router.post('/', authMiddleware, playlistController.createUserPlaylist);
+router.post('/', authMiddleware, upload.single('coverImage'), playlistController.createUserPlaylist);
 
 /**
- * @route   PUT /api/playlists/user/:id
- * @desc    User playlist güncelle
+ * @route   GET /api/playlists/my-playlists
+ * @desc    Kullanıcının kendi playlist'lerini getir
  * @access  Private
  */
-router.put('/user/:id', authMiddleware, playlistController.updateUserPlaylist);
+router.get('/my-playlists', authMiddleware, playlistController.getMyPlaylists);
 
 /**
- * @route   DELETE /api/playlists/user/:id
- * @desc    User playlist sil
+ * @route   PUT /api/playlists/:id
+ * @desc    Playlist güncelle (isim, cover, vb.)
  * @access  Private
  */
-router.delete('/user/:id', authMiddleware, playlistController.deleteUserPlaylist);
+router.put('/:id', authMiddleware, upload.single('coverImage'), playlistController.updatePlaylist);
+
+/**
+ * @route   PATCH /api/playlists/:id/name
+ * @desc    Playlist ismini değiştir
+ * @access  Private
+ */
+router.patch('/:id/name', authMiddleware, playlistController.updatePlaylistName);
+
+/**
+ * @route   PATCH /api/playlists/:id/cover
+ * @desc    Playlist cover'ını değiştir
+ * @access  Private
+ */
+router.patch('/:id/cover', authMiddleware, upload.single('coverImage'), playlistController.updatePlaylistCover);
 
 /**
  * @route   DELETE /api/playlists/:id
- * @desc    Playlist sil (admin/user otomatik tespit)
- * @access  Public/Private
+ * @desc    Playlist sil
+ * @access  Private
  */
-router.delete('/:id', playlistController.deletePlaylist);
+router.delete('/:id', authMiddleware, playlistController.deletePlaylist);
+
+// ========== TRACK MANAGEMENT ROUTES ==========
+
+/**
+ * @route   POST /api/playlists/:id/tracks
+ * @desc    Playlist'e birden fazla track ekle
+ * @access  Private
+ * @body    { trackIds: [musicId1, musicId2, ...] }
+ */
+router.post('/:id/tracks', authMiddleware, playlistController.addTracksToPlaylist);
+
+/**
+ * @route   DELETE /api/playlists/:id/tracks
+ * @desc    Playlist'ten track(ler) çıkar
+ * @access  Private
+ * @body    { trackIds: [musicId1, musicId2, ...] }
+ */
+router.delete('/:id/tracks', authMiddleware, playlistController.removeTracksFromPlaylist);
+
+/**
+ * @route   PUT /api/playlists/:id/tracks/reorder
+ * @desc    Playlist'teki track sırasını değiştir
+ * @access  Private
+ * @body    { trackIds: [orderedMusicIds] } veya { fromIndex: 0, toIndex: 5 }
+ */
+router.put('/:id/tracks/reorder', authMiddleware, playlistController.reorderTracks);
+
+/**
+ * @route   PUT /api/playlists/:id/tracks/move-top
+ * @desc    Seçili track(ler)i en üste taşı
+ * @access  Private
+ * @body    { trackIds: [musicId1, musicId2, ...] }
+ */
+router.put('/:id/tracks/move-top', authMiddleware, playlistController.moveTracksToTop);
+
+/**
+ * @route   PUT /api/playlists/:id/tracks/move-bottom
+ * @desc    Seçili track(ler)i en alta taşı
+ * @access  Private
+ * @body    { trackIds: [musicId1, musicId2, ...] }
+ */
+router.put('/:id/tracks/move-bottom', authMiddleware, playlistController.moveTracksToBottom);
+
+// ========== COVER GENERATION ==========
+
+/**
+ * @route   GET /api/playlists/:id/generate-cover
+ * @desc    Playlist için otomatik cover oluştur (son 4 şarkıdan)
+ * @access  Public
+ */
+router.get('/:id/generate-cover', playlistController.generatePlaylistCover);
+
+// ========== LEGACY/COMPATIBILITY ==========
+
+/**
+ * @route   PUT /api/playlists/user/:id
+ * @desc    User playlist güncelle (backward compatibility)
+ * @access  Private
+ */
+router.put('/user/:id', authMiddleware, playlistController.updatePlaylist);
+
+/**
+ * @route   DELETE /api/playlists/user/:id
+ * @desc    User playlist sil (backward compatibility)
+ * @access  Private
+ */
+router.delete('/user/:id', authMiddleware, playlistController.deletePlaylist);
 
 module.exports = router;
